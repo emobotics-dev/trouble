@@ -918,6 +918,66 @@ mod tests {
         assert_eq!(central_ops.encryptions[0], peripheral_ops.encryptions[0]);
     }
 
+    /// A central that bonds and a legacy peripheral that does not: keys are
+    /// still distributed as negotiated, only not stored, and both complete.
+    #[cfg(feature = "legacy-pairing")]
+    #[test]
+    fn legacy_pairing_completes_when_only_the_central_bonds() {
+        let peripheral = Address::random([0xff, 1, 2, 3, 4, 5]);
+        let central = Address::random([0xff, 2, 2, 3, 4, 5]);
+
+        let mut peripheral_ops = TestOps::<80>::new(0xDEAD);
+        peripheral_ops.fixed_passkey = PassKey::new(0);
+        let mut central_ops = TestOps::<80>::new(0xBEEF);
+        central_ops.bondable = true;
+
+        let mut peripheral_pairing = Pairing::new_legacy_peripheral(peripheral, central, IoCapabilities::DisplayOnly);
+        let central_pairing = Pairing::initiate_central(
+            central,
+            peripheral,
+            &mut central_ops,
+            IoCapabilities::KeyboardOnly,
+            true,
+        )
+        .unwrap();
+        let mut rng: ChaCha12Rng = ChaCha12Core::seed_from_u64(1).into();
+        let request = &central_ops.sent_packets[0];
+        peripheral_pairing
+            .handle_l2cap_command(request.command, request.payload(), &mut peripheral_ops, &mut rng)
+            .unwrap();
+        let mut central_pairing = central_pairing.switch_to_legacy_central().unwrap();
+        let (mut sent_c, mut sent_p) = (1, 0);
+        transmit_packets(&mut peripheral_ops, &mut central_ops, &mut rng, &mut peripheral_pairing, &mut central_pairing, &mut sent_c, &mut sent_p);
+        central_pairing
+            .handle_event(Event::PassKeyInput(0), &mut central_ops, &mut rng)
+            .unwrap();
+        transmit_packets(&mut peripheral_ops, &mut central_ops, &mut rng, &mut peripheral_pairing, &mut central_pairing, &mut sent_c, &mut sent_p);
+        peripheral_pairing
+            .handle_event(Event::LinkEncryptedResult(true), &mut peripheral_ops, &mut rng)
+            .unwrap();
+        central_pairing
+            .handle_event(Event::LinkEncryptedResult(true), &mut central_ops, &mut rng)
+            .unwrap();
+        transmit_packets(&mut peripheral_ops, &mut central_ops, &mut rng, &mut peripheral_pairing, &mut central_pairing, &mut sent_c, &mut sent_p);
+
+        let completed = |ops: &TestOps<80>| {
+            ops.connection_events
+                .iter()
+                .any(|e| matches!(e, ConnectionEvent::PairingComplete { .. }))
+        };
+        let cmds = |ops: &TestOps<80>| ops.sent_packets.iter().map(|p| p.command).collect::<heapless::Vec<_, 80>>();
+        assert!(
+            completed(&peripheral_ops),
+            "peripheral never completed: {:?}\nP {:?}\nC {:?}\nP sent {:?}\nC sent {:?}",
+            peripheral_ops.connection_events,
+            peripheral_pairing.state,
+            central_pairing.state,
+            cmds(&peripheral_ops),
+            cmds(&central_ops)
+        );
+        assert!(completed(&central_ops), "central never completed: {:?}", central_ops.connection_events);
+    }
+
     #[test]
     fn pass_key_range() {
         assert_eq!(PassKey::new(999_999).map(|k| k.value()), Some(999_999));

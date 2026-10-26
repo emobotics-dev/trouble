@@ -248,20 +248,17 @@ impl Pairing {
         rng: &mut RNG,
     ) -> Result<Self, Error> {
         info!("[smp legacy central] Link encrypted!");
-        if pairing_data.want_bonding() {
-            // Receive keys from peripheral first, then send ours
-            if pairing_data.peer_features.responder_key_distribution.encryption_key() {
-                Ok(Self::ReceivingKeys {
-                    phase: 0,
-                    received_ltk: LongTermKey(0),
-                })
-            } else if pairing_data.peer_features.responder_key_distribution.identity_key() {
-                Ok(Self::WaitingIdentitityInformation)
-            } else {
-                Self::send_all_keys(pairing_data, ops, rng)
-            }
+        // Receive keys from peripheral first, then send ours. As negotiated,
+        // bonding or not: bonding decides only what is stored.
+        if pairing_data.peer_features.responder_key_distribution.encryption_key() {
+            Ok(Self::ReceivingKeys {
+                phase: 0,
+                received_ltk: LongTermKey(0),
+            })
+        } else if pairing_data.peer_features.responder_key_distribution.identity_key() {
+            Ok(Self::WaitingIdentitityInformation)
         } else {
-            Ok(Self::Success)
+            Self::send_all_keys(pairing_data, ops, rng)
         }
     }
 
@@ -595,12 +592,7 @@ impl Pairing {
         }
 
         trace!("[smp legacy central] Received identity address {:?}", addr);
-
-        if pairing_data.want_bonding() {
-            Self::send_all_keys(pairing_data, ops, rng)
-        } else {
-            Ok(Self::Success)
-        }
+        Self::send_all_keys(pairing_data, ops, rng)
     }
 }
 

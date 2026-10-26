@@ -253,8 +253,9 @@ impl Pairing {
         if matches!(previous, Self::WaitingPairingRequest) {
             pairing_data.bond_information = ops.try_enable_bonded_encryption()?;
         }
-        if matches!(previous, Self::WaitingLinkEncrypted) && pairing_data.want_bonding() {
-            // Peripheral sends its keys first, then receives central's
+        if matches!(previous, Self::WaitingLinkEncrypted) {
+            // Peripheral sends its keys first, then receives central's. As
+            // negotiated, bonding or not: bonding decides only what is stored.
             Self::send_all_keys(pairing_data, ops, rng)
         } else if pairing_data.peer_features.initiator_key_distribution.identity_key() {
             Ok(Self::WaitingIdentitityInformation)
