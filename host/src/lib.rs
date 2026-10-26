@@ -818,6 +818,16 @@ impl<'stack, C: Controller, P: PacketPool> StackBuilder<'stack, C, P> {
         self
     }
 
+    /// Answer every pairing request as a legacy peripheral, without the SC flag.
+    ///
+    /// For peripherals that must pair with a fixed passkey: LESC passkey entry draws a random one.
+    /// Only relevant if the feature `legacy-pairing` is enabled.
+    #[cfg(feature = "legacy-pairing")]
+    pub fn set_legacy_pairing_only(mut self, enabled: bool) -> Self {
+        self.host().connections.security_manager.set_legacy_only(enabled);
+        self
+    }
+
     /// Finalize configuration and return the stack.
     ///
     /// Use the returned [`Stack`] for runtime operations: obtain a [`Runner`] via
@@ -885,6 +895,14 @@ impl<'stack, C: Controller, P: PacketPool> Stack<'stack, C, P> {
             .connections
             .security_manager
             .set_secure_connections_only(enabled);
+    }
+
+    /// Answer every pairing request as a legacy peripheral, without the SC flag.
+    ///
+    /// Only relevant if the feature `legacy-pairing` is enabled.
+    #[cfg(feature = "legacy-pairing")]
+    pub fn set_legacy_pairing_only(&self, enabled: bool) {
+        self.host.connections.security_manager.set_legacy_only(enabled);
     }
 
     /// Set the RPA (Resolvable Private Address) rotation timeout.

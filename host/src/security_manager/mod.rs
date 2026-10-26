@@ -201,6 +201,20 @@ struct Inner {
     /// When true, reject legacy pairing even if the feature is compiled in
     #[cfg(feature = "legacy-pairing")]
     secure_connections_only: bool,
+    /// When true, answer every pairing request as a legacy peripheral (no SC flag)
+    #[cfg(feature = "legacy-pairing")]
+    legacy_only: bool,
+}
+
+/// Whether a peripheral answers this `PairingRequest` with legacy pairing: the peer did not ask
+/// for SC, asked for a key too short for LESC, or we were told to pair legacy only.
+#[cfg(feature = "legacy-pairing")]
+fn peripheral_uses_legacy(command: Command, payload: &[u8], legacy_only: bool) -> bool {
+    command == Command::PairingRequest
+        && payload.len() >= 4
+        && (legacy_only
+            || !AuthReq::from(payload[2]).secure_connection()
+            || payload[3] < crate::security_manager::constants::ENCRYPTION_KEY_SIZE_128_BITS)
 }
 
 /// Parsed SMP command data extracted from an L2CAP PDU
@@ -265,12 +279,7 @@ impl Inner {
 
             #[cfg(feature = "legacy-pairing")]
             {
-                // Check if peer supports SC by peeking at PairingRequest AuthReq byte,
-                // or if peer requests a key size smaller than LESC requires
-                let use_legacy = command == Command::PairingRequest
-                    && payload.len() >= 4
-                    && (!AuthReq::from(payload[2]).secure_connection()
-                        || payload[3] < crate::security_manager::constants::ENCRYPTION_KEY_SIZE_128_BITS);
+                let use_legacy = peripheral_uses_legacy(command, payload, self.legacy_only);
 
                 if use_legacy && self.secure_connections_only {
                     if payload[3] < crate::security_manager::constants::ENCRYPTION_KEY_SIZE_128_BITS {
@@ -294,10 +303,7 @@ impl Inner {
         // Check if we need to switch from LESC to legacy peripheral
         // when receiving a PairingRequest without SC flag or with insufficient key size
         #[cfg(feature = "legacy-pairing")]
-        if command == Command::PairingRequest
-            && payload.len() >= 4
-            && (!AuthReq::from(payload[2]).secure_connection()
-                || payload[3] < crate::security_manager::constants::ENCRYPTION_KEY_SIZE_128_BITS)
+        if peripheral_uses_legacy(command, payload, self.legacy_only)
             && self.pairing_sm.as_ref().is_some_and(|p| p.is_lesc_peripheral())
         {
             if self.secure_connections_only {
@@ -654,6 +660,8 @@ impl<'d> SecurityManager<'d> {
                 io_capabilities: IoCapabilities::NoInputNoOutput,
                 #[cfg(feature = "legacy-pairing")]
                 secure_connections_only: false,
+                #[cfg(feature = "legacy-pairing")]
+                legacy_only: false,
             }),
             bonds,
             events: Channel::new(),
@@ -670,6 +678,12 @@ impl<'d> SecurityManager<'d> {
     #[cfg(feature = "legacy-pairing")]
     pub(crate) fn set_secure_connections_only(&self, enabled: bool) {
         self.inner.borrow_mut().secure_connections_only = enabled;
+    }
+
+    /// Pair as a legacy peripheral even when the central offers Secure Connections.
+    #[cfg(feature = "legacy-pairing")]
+    pub(crate) fn set_legacy_only(&self, enabled: bool) {
+        self.inner.borrow_mut().legacy_only = enabled;
     }
 
     /// Seed the security manager's CSPRNG and regenerate the persistent LESC keypair.
@@ -1290,5 +1304,34 @@ impl<'sm, 'cm, 'cm2, 'cs, P: PacketPool> PairingOps<P> for PairingOpsImpl<'sm, '
 
     fn local_identity_address(&self) -> Result<Address, Error> {
         self.state.local_address.ok_or(Error::InvalidValue)
+    }
+}
+
+#[cfg(all(test, feature = "legacy-pairing"))]
+mod legacy_choice_tests {
+    use super::*;
+
+    /// io=DisplayOnly, oob=0, AuthReq, max key size 16, key distribution
+    fn request(auth_req: u8, key_size: u8) -> [u8; 6] {
+        [0x00, 0x00, auth_req, key_size, 0x01, 0x01]
+    }
+
+    #[test]
+    fn sc_request_goes_lesc_unless_legacy_only() {
+        let sc = request(0x0d, 16); // bonding + MITM + SC
+        assert!(!peripheral_uses_legacy(Command::PairingRequest, &sc, false));
+        assert!(peripheral_uses_legacy(Command::PairingRequest, &sc, true));
+    }
+
+    #[test]
+    fn non_sc_or_short_key_goes_legacy() {
+        assert!(peripheral_uses_legacy(Command::PairingRequest, &request(0x05, 16), false));
+        assert!(peripheral_uses_legacy(Command::PairingRequest, &request(0x0d, 7), false));
+    }
+
+    #[test]
+    fn only_pairing_requests_decide() {
+        assert!(!peripheral_uses_legacy(Command::PairingConfirm, &request(0x05, 16), true));
+        assert!(!peripheral_uses_legacy(Command::PairingRequest, &[0x00, 0x00], true));
     }
 }
