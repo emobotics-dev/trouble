@@ -1,13 +1,12 @@
 use bt_hci::param::{AddrKind, BdAddr};
-use rand::Rng;
 use rand_core::{CryptoRng, RngCore};
 
 use crate::codec::{Decode, Encode};
 use crate::prelude::ConnectionEvent;
 use crate::security_manager::crypto::{Confirm, DHKey, Nonce, PublicKey, PublicKeyX};
 use crate::security_manager::pairing::util::{
-    choose_pairing_method, make_confirm_packet, make_dhkey_check_packet, make_pairing_random, make_public_key_packet,
-    prepare_packet, PairingMethod, PassKeyEntryAction,
+    choose_pairing_method, display_passkey, make_confirm_packet, make_dhkey_check_packet, make_pairing_random,
+    make_public_key_packet, prepare_packet, PairingMethod, PassKeyEntryAction,
 };
 use crate::security_manager::pairing::{Event, Input, PairingData, PairingOps};
 use crate::security_manager::types::{AuthReq, Command, PairingFeatures, PassKey};
@@ -306,7 +305,7 @@ impl Pairing {
             }
             PairingMethod::PassKeyEntry { peripheral, .. } => {
                 if peripheral == PassKeyEntryAction::Display {
-                    phase_data.local_secret_rb = rng.sample(rand::distributions::Uniform::new_inclusive(0, 999999));
+                    phase_data.local_secret_rb = display_passkey(ops, rng).value() as u128;
                     phase_data.peer_secret_ra = phase_data.local_secret_rb;
                     ops.try_send_connection_event(ConnectionEvent::PassKeyDisplay(PassKey(
                         phase_data.local_secret_rb as u32,

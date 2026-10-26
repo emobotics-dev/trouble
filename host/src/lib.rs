@@ -24,7 +24,7 @@ use crate::connection::Connection;
 use crate::connection_manager::ConnectionStorage;
 #[cfg(feature = "security")]
 pub use crate::security_manager::{
-    BondInformation, IdentityResolvingKey, LongTermKey, OobData, Reason as PairingFailedReason,
+    BondInformation, IdentityResolvingKey, LongTermKey, OobData, PassKey, Reason as PairingFailedReason,
 };
 pub use crate::types::capabilities::IoCapabilities;
 
@@ -107,7 +107,7 @@ pub mod prelude {
     pub use crate::scan::*;
     #[cfg(feature = "security")]
     pub use crate::security_manager::{
-        BondInformation, IdentityResolvingKey, LongTermKey, OobData, Reason as PairingFailedReason,
+        BondInformation, IdentityResolvingKey, LongTermKey, OobData, PassKey, Reason as PairingFailedReason,
     };
     pub use crate::types::capabilities::IoCapabilities;
     #[cfg(feature = "gatt")]
@@ -828,6 +828,16 @@ impl<'stack, C: Controller, P: PacketPool> StackBuilder<'stack, C, P> {
         self
     }
 
+    /// Show this passkey whenever we are the display side, instead of a random one.
+    ///
+    /// For devices with a printed or user-set PIN. A fixed passkey weakens MITM protection.
+    /// Only relevant if the feature `security` is enabled.
+    #[cfg(feature = "security")]
+    pub fn set_fixed_passkey(mut self, passkey: Option<PassKey>) -> Self {
+        self.host().connections.security_manager.set_fixed_passkey(passkey);
+        self
+    }
+
     /// Finalize configuration and return the stack.
     ///
     /// Use the returned [`Stack`] for runtime operations: obtain a [`Runner`] via
@@ -903,6 +913,14 @@ impl<'stack, C: Controller, P: PacketPool> Stack<'stack, C, P> {
     #[cfg(feature = "legacy-pairing")]
     pub fn set_legacy_pairing_only(&self, enabled: bool) {
         self.host.connections.security_manager.set_legacy_only(enabled);
+    }
+
+    /// Show this passkey whenever we are the display side, instead of a random one.
+    ///
+    /// Only relevant if the feature `security` is enabled.
+    #[cfg(feature = "security")]
+    pub fn set_fixed_passkey(&self, passkey: Option<PassKey>) {
+        self.host.connections.security_manager.set_fixed_passkey(passkey);
     }
 
     /// Set the RPA (Resolvable Private Address) rotation timeout.

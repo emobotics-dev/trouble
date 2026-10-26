@@ -287,6 +287,11 @@ impl defmt::Format for Command {
 pub struct PassKey(pub(crate) u32);
 
 impl PassKey {
+    /// A six-digit passkey, or `None` above 999999.
+    pub fn new(value: u32) -> Option<Self> {
+        (value <= 999_999).then_some(Self(value))
+    }
+
     /// Get the underlying value as an integer.
     pub fn value(&self) -> u32 {
         self.0

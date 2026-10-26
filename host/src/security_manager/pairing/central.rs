@@ -1,12 +1,11 @@
-use rand::Rng;
 use rand_core::{CryptoRng, RngCore};
 
 use crate::codec::{Decode, Encode};
 use crate::connection::{ConnectionEvent, SecurityLevel};
 use crate::security_manager::crypto::{Confirm, DHKey, MacKey, Nonce, PublicKey, PublicKeyX, SecretKey};
 use crate::security_manager::pairing::util::{
-    choose_pairing_method, make_confirm_packet, make_dhkey_check_packet, make_pairing_random, make_public_key_packet,
-    prepare_packet, PairingMethod, PassKeyEntryAction,
+    choose_pairing_method, display_passkey, make_confirm_packet, make_dhkey_check_packet, make_pairing_random,
+    make_public_key_packet, prepare_packet, PairingMethod, PassKeyEntryAction,
 };
 use crate::security_manager::pairing::{Event, Input, PairingData, PairingOps};
 use crate::security_manager::types::{AuthReq, BondingFlag, Command, PairingFeatures, UseOutOfBand};
@@ -456,7 +455,7 @@ impl Pairing {
             }
             PairingMethod::PassKeyEntry { central, .. } => {
                 if central == PassKeyEntryAction::Display {
-                    phase_data.local_secret_ra = rng.sample(rand::distributions::Uniform::new_inclusive(0, 999999));
+                    phase_data.local_secret_ra = display_passkey(ops, rng).value() as u128;
                     phase_data.peer_secret_rb = phase_data.local_secret_ra;
                     ops.try_send_connection_event(ConnectionEvent::PassKeyDisplay(PassKey(
                         phase_data.local_secret_ra as u32,

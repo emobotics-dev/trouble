@@ -1,6 +1,10 @@
+use rand::Rng;
+use rand_core::RngCore;
+
 use crate::prelude::SecurityLevel;
 use crate::security_manager::crypto::{Check, Confirm, DHKey, MacKey, Nonce, PublicKey};
-use crate::security_manager::types::{Command, PairingFeatures, UseOutOfBand};
+use crate::security_manager::pairing::PairingOps;
+use crate::security_manager::types::{Command, PairingFeatures, PassKey, UseOutOfBand};
 use crate::security_manager::TxPacket;
 use crate::{Address, Error, IoCapabilities, LongTermKey, PacketPool};
 
@@ -104,6 +108,12 @@ pub fn choose_legacy_pairing_method(central: PairingFeatures, peripheral: Pairin
             (IoCapabilities::KeyboardDisplay, IoCapabilities::KeyboardDisplay) => PairingMethod::CENTRAL_DISPLAYS,
         }
     }
+}
+
+/// The passkey the display side shows: the fixed one if set, else random (Vol 3, Part H, 2.3.5.3).
+pub fn display_passkey<P: PacketPool, OPS: PairingOps<P>, RNG: RngCore>(ops: &OPS, rng: &mut RNG) -> PassKey {
+    ops.fixed_passkey()
+        .unwrap_or_else(|| PassKey(rng.sample(rand::distributions::Uniform::new_inclusive(0, 999_999))))
 }
 
 pub fn prepare_packet<P: PacketPool>(command: Command) -> Result<TxPacket<P>, Error> {

@@ -111,6 +111,8 @@ struct SecurityManagerData {
     local_address: Option<Address>,
     /// Local Identity Resolving Key (set when privacy is enabled)
     local_irk: Option<IdentityResolvingKey>,
+    /// Passkey shown when we are the display side; `None` draws a random one per pairing
+    fixed_passkey: Option<PassKey>,
 }
 
 impl SecurityManagerData {
@@ -119,6 +121,7 @@ impl SecurityManagerData {
         Self {
             local_address: None,
             local_irk: None,
+            fixed_passkey: None,
         }
     }
 }
@@ -684,6 +687,11 @@ impl<'d> SecurityManager<'d> {
     #[cfg(feature = "legacy-pairing")]
     pub(crate) fn set_legacy_only(&self, enabled: bool) {
         self.inner.borrow_mut().legacy_only = enabled;
+    }
+
+    /// Display this passkey instead of a random one, as devices with a printed PIN do.
+    pub(crate) fn set_fixed_passkey(&self, passkey: Option<PassKey>) {
+        self.inner.borrow_mut().state.fixed_passkey = passkey;
     }
 
     /// Seed the security manager's CSPRNG and regenerate the persistent LESC keypair.
@@ -1304,6 +1312,10 @@ impl<'sm, 'cm, 'cm2, 'cs, P: PacketPool> PairingOps<P> for PairingOpsImpl<'sm, '
 
     fn local_identity_address(&self) -> Result<Address, Error> {
         self.state.local_address.ok_or(Error::InvalidValue)
+    }
+
+    fn fixed_passkey(&self) -> Option<PassKey> {
+        self.state.fixed_passkey
     }
 }
 

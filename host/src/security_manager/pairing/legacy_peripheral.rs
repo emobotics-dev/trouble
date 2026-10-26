@@ -5,9 +5,9 @@ use rand_core::{CryptoRng, RngCore};
 use crate::codec::{Decode, Encode};
 use crate::connection::ConnectionEvent;
 use crate::security_manager::pairing::util::{
-    choose_legacy_pairing_method, make_central_identification_packet, make_encryption_information_packet,
-    make_identity_address_information_packet, make_identity_information_packet, make_pairing_random, prepare_packet,
-    PairingMethod, PassKeyEntryAction,
+    choose_legacy_pairing_method, display_passkey, make_central_identification_packet,
+    make_encryption_information_packet, make_identity_address_information_packet, make_identity_information_packet,
+    make_pairing_random, prepare_packet, PairingMethod, PassKeyEntryAction,
 };
 use crate::security_manager::pairing::{Event, Input, PairingData, PairingOps};
 use crate::security_manager::types::{AuthReq, Command, PairingFeatures, PassKey};
@@ -469,7 +469,7 @@ impl Pairing {
             }
             PairingMethod::PassKeyEntry { peripheral, .. } => {
                 if peripheral == PassKeyEntryAction::Display {
-                    let tk = rng.sample(rand::distributions::Uniform::new_inclusive(0u32, 999999)) as u128;
+                    let tk = display_passkey(ops, rng).value() as u128;
                     ops.try_send_connection_event(ConnectionEvent::PassKeyDisplay(PassKey(tk as u32)))?;
                     Ok(Self::WaitingPairingConfirm(ConfirmPhaseData {
                         tk,

@@ -4,7 +4,7 @@ use rand_core::{CryptoRng, RngCore};
 
 use self::util::PairingMethod;
 use crate::connection::{ConnectionEvent, SecurityLevel};
-use crate::security_manager::types::{BondingFlag, Command, PairingFeatures};
+use crate::security_manager::types::{BondingFlag, Command, PairingFeatures, PassKey};
 use crate::security_manager::TxPacket;
 use crate::{Address, BondInformation, Error, IoCapabilities, LongTermKey, PacketPool};
 
@@ -89,6 +89,8 @@ pub trait PairingOps<P: PacketPool> {
     /// The local identity address (public or static random), used for Identity Address Information.
     /// This is distinct from the address used for pairing calculations, which may be an RPA.
     fn local_identity_address(&self) -> Result<Address, Error>;
+    /// The passkey to show when we are the display side, if fixed.
+    fn fixed_passkey(&self) -> Option<PassKey>;
 }
 
 #[derive(Debug)]
@@ -422,6 +424,7 @@ mod tests {
         pub(crate) oob_available: bool,
         pub(crate) secret_key: crate::security_manager::crypto::SecretKey,
         pub(crate) public_key: crate::security_manager::crypto::PublicKey,
+        pub(crate) fixed_passkey: Option<PassKey>,
     }
 
     impl<const N: usize> TestOps<N> {
@@ -438,6 +441,7 @@ mod tests {
                 oob_available: false,
                 secret_key,
                 public_key,
+                fixed_passkey: None,
             }
         }
     }
@@ -523,6 +527,10 @@ mod tests {
 
         fn local_identity_address(&self) -> Result<Address, Error> {
             Ok(Address::random([0xff, 0x8f, 0x08, 0x05, 0xe4, 0xff]))
+        }
+
+        fn fixed_passkey(&self) -> Option<PassKey> {
+            self.fixed_passkey
         }
     }
 
@@ -843,6 +851,77 @@ mod tests {
             peripheral_pairing.security_level(),
             SecurityLevel::EncryptedAuthenticated
         );
+    }
+
+    #[cfg(feature = "legacy-pairing")]
+    #[test]
+    fn legacy_pass_key_entry_fixed_peripheral_display() {
+        let peripheral = Address::random([0xff, 1, 2, 3, 4, 5]);
+        let central = Address::random([0xff, 2, 2, 3, 4, 5]);
+
+        let mut peripheral_ops = TestOps::<80>::new(0xDEAD);
+        peripheral_ops.fixed_passkey = PassKey::new(0);
+        let mut central_ops = TestOps::<80>::new(0xBEEF);
+
+        let mut peripheral_pairing = Pairing::new_legacy_peripheral(peripheral, central, IoCapabilities::DisplayOnly);
+        let central_pairing = Pairing::initiate_central(
+            central,
+            peripheral,
+            &mut central_ops,
+            IoCapabilities::KeyboardOnly,
+            true,
+        )
+        .unwrap();
+        let mut rng: ChaCha12Rng = ChaCha12Core::seed_from_u64(1).into();
+        let request = &central_ops.sent_packets[0];
+        peripheral_pairing
+            .handle_l2cap_command(request.command, request.payload(), &mut peripheral_ops, &mut rng)
+            .unwrap();
+        // As the security manager does on a PairingResponse without SC.
+        let mut central_pairing = central_pairing.switch_to_legacy_central().unwrap();
+
+        let mut num_central_data_sent = 1;
+        let mut num_peripheral_data_sent = 0;
+        transmit_packets(
+            &mut peripheral_ops,
+            &mut central_ops,
+            &mut rng,
+            &mut peripheral_pairing,
+            &mut central_pairing,
+            &mut num_central_data_sent,
+            &mut num_peripheral_data_sent,
+        );
+
+        assert!(matches!(
+            peripheral_ops.connection_events[0],
+            ConnectionEvent::PassKeyDisplay(pk) if pk.value() == 0
+        ));
+        assert!(matches!(
+            central_ops.connection_events[0],
+            ConnectionEvent::PassKeyInput
+        ));
+
+        // The user types the printed PIN, not a value the peripheral sent.
+        central_pairing
+            .handle_event(Event::PassKeyInput(0), &mut central_ops, &mut rng)
+            .unwrap();
+        transmit_packets(
+            &mut peripheral_ops,
+            &mut central_ops,
+            &mut rng,
+            &mut peripheral_pairing,
+            &mut central_pairing,
+            &mut num_central_data_sent,
+            &mut num_peripheral_data_sent,
+        );
+
+        assert_eq!(central_ops.encryptions[0], peripheral_ops.encryptions[0]);
+    }
+
+    #[test]
+    fn pass_key_range() {
+        assert_eq!(PassKey::new(999_999).map(|k| k.value()), Some(999_999));
+        assert_eq!(PassKey::new(1_000_000), None);
     }
 
     #[test]
