@@ -81,9 +81,14 @@ impl ServerBuilder {
         let name = &self.properties.ident;
         let visibility = &self.properties.vis;
 
-        let mutex_type = self.arguments.mutex_type.unwrap_or(syn::Type::Verbatim(quote!(
-            trouble_host::__export::embassy_sync::blocking_mutex::raw::NoopRawMutex
-        )));
+        // No default: a silent `NoopRawMutex` is no mutual exclusion at all.
+        let Some(mutex_type) = self.arguments.mutex_type else {
+            return syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "#[gatt_server] needs `mutex_type = <RawMutex>`, e.g. `mutex_type = NoopRawMutex` if every access is from one executor",
+            )
+            .to_compile_error();
+        };
 
         let packet_type = self
             .arguments

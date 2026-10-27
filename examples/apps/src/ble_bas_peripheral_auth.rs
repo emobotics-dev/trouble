@@ -11,7 +11,7 @@ const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 2; // Signal + att
 
 // GATT Server definition
-#[gatt_server]
+#[gatt_server(mutex_type = embassy_sync::blocking_mutex::raw::NoopRawMutex)]
 struct Server {
     battery_service: BatteryService,
 }
