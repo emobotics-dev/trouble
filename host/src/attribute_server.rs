@@ -31,7 +31,8 @@ impl Client {
 pub struct AttributeServer<'values, M: RawMutex, P: PacketPool, const ATT_MAX: usize, const CONN_MAX: usize> {
     att_table: AttributeTable<'values, M, ATT_MAX>,
     client_att_tables: ClientAttTables<M, CONN_MAX>,
-    _p: PhantomData<P>,
+    // A type marker only: no pool lives here, so `P`'s auto traits must not leak in.
+    _p: PhantomData<fn() -> P>,
 }
 
 pub(crate) mod sealed {
