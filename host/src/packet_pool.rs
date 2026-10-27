@@ -1,102 +1,58 @@
 //! A packet pool for allocating and freeing packet buffers with quality of service policy.
-use core::cell::RefCell;
+use core::cell::UnsafeCell;
+#[cfg(target_has_atomic = "8")]
+use core::sync::atomic::{AtomicBool, Ordering};
 
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, RawMutex};
-use embassy_sync::blocking_mutex::Mutex;
+#[cfg(not(target_has_atomic = "8"))]
+use portable_atomic::{AtomicBool, Ordering};
 
 use crate::{config, Packet, PacketPool};
 
-struct PacketBuf<const MTU: usize> {
-    buf: [u8; MTU],
-    free: bool,
-}
-
-impl<const MTU: usize> PacketBuf<MTU> {
-    const NEW: PacketBuf<MTU> = PacketBuf::new();
-
-    pub(crate) const fn new() -> Self {
-        Self {
-            buf: [0; MTU],
-            free: true,
-        }
-    }
-}
-
-struct State<const MTU: usize, const N: usize> {
-    packets: [PacketBuf<MTU>; N],
-}
-
-impl<const MTU: usize, const N: usize> State<MTU, N> {
-    pub(crate) const fn new() -> Self {
-        Self {
-            packets: [PacketBuf::NEW; N],
-        }
-    }
-
-    fn alloc(&mut self) -> Option<PacketRef<MTU>> {
-        for (idx, packet) in self.packets.iter_mut().enumerate() {
-            if packet.free {
-                // info!("[{}] alloc {}", id.0, idx);
-                packet.free = false;
-                packet.buf.iter_mut().for_each(|b| *b = 0);
-                return Some(PacketRef {
-                    idx,
-                    buf: packet.buf.as_mut_ptr(),
-                });
-            }
-        }
-        None
-    }
-
-    fn free(&mut self, p_ref: &PacketRef<MTU>) {
-        // info!("[{}] free {}", id.0, p_ref.idx);
-        self.packets[p_ref.idx].free = true;
-    }
-
-    fn available(&mut self) -> usize {
-        self.packets.iter().filter(|p| p.free).count()
-    }
-}
-
 /// A packet pool holds a pool of packet buffers that can be dynamically allocated
 /// and free'd.
-pub struct StaticPacketPool<M: RawMutex, const MTU: usize, const N: usize> {
-    state: Mutex<M, RefCell<State<MTU, N>>>,
+///
+/// Lock-free: a slot is claimed by a compare-and-swap on its `free` flag, and only
+/// the claimer touches its buffer until it stores the flag back.
+pub struct StaticPacketPool<const MTU: usize, const N: usize> {
+    bufs: [UnsafeCell<[u8; MTU]>; N],
+    free: [AtomicBool; N],
 }
 
-impl<M: RawMutex, const MTU: usize, const N: usize> Default for StaticPacketPool<M, MTU, N> {
+// SAFETY: a buffer is reachable only through the `PacketRef` of the one caller
+// whose CAS claimed it; `free` hands it back with Release, the next claim Acquires.
+unsafe impl<const MTU: usize, const N: usize> Sync for StaticPacketPool<MTU, N> {}
+
+impl<const MTU: usize, const N: usize> Default for StaticPacketPool<MTU, N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<M: RawMutex, const MTU: usize, const N: usize> StaticPacketPool<M, MTU, N> {
+impl<const MTU: usize, const N: usize> StaticPacketPool<MTU, N> {
     /// Create a new packet pool with the given QoS policy
     const fn new() -> Self {
         Self {
-            state: Mutex::new(RefCell::new(State::new())),
+            bufs: [const { UnsafeCell::new([0; MTU]) }; N],
+            free: [const { AtomicBool::new(true) }; N],
         }
     }
 
     fn alloc(&self) -> Option<PacketRef<MTU>> {
-        self.state.lock(|state| {
-            let mut state = state.borrow_mut();
-            state.alloc()
+        let idx = self.free.iter().position(|f| {
+            f.compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+        })?;
+        let buf = self.bufs[idx].get();
+        // SAFETY: the CAS above made this slot ours alone.
+        unsafe { (*buf).fill(0) };
+        Some(PacketRef {
+            idx,
+            buf: buf.cast(),
         })
     }
 
     fn free(&self, p_ref: &PacketRef<MTU>) {
-        self.state.lock(|state| {
-            let mut state = state.borrow_mut();
-            state.free(p_ref);
-        });
-    }
-
-    fn available(&self) -> usize {
-        self.state.lock(|state| {
-            let mut state = state.borrow_mut();
-            state.available()
-        })
+        self.free[p_ref.idx].store(true, Ordering::Release);
     }
 }
 
@@ -109,13 +65,11 @@ pub struct PacketRef<const MTU: usize> {
 
 /// Global default packet pool.
 pub type DefaultPacketPool = StaticPacketPool<
-    CriticalSectionRawMutex,
     { config::DEFAULT_PACKET_POOL_MTU },
     { config::DEFAULT_PACKET_POOL_SIZE },
 >;
 
 static DEFAULT_POOL: StaticPacketPool<
-    CriticalSectionRawMutex,
     { config::DEFAULT_PACKET_POOL_MTU },
     { config::DEFAULT_PACKET_POOL_SIZE },
 > = StaticPacketPool::new();
@@ -162,13 +116,11 @@ impl Drop for DefaultPacket {
 
 #[cfg(test)]
 mod tests {
-    use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-
     use super::*;
 
     #[test]
     fn test_none_qos() {
-        let pool: StaticPacketPool<NoopRawMutex, 27, 8> = StaticPacketPool::new();
+        let pool: StaticPacketPool<27, 8> = StaticPacketPool::new();
 
         let a1 = pool.alloc();
         assert!(a1.is_some());
@@ -190,5 +142,19 @@ mod tests {
 
         let b2 = pool.alloc();
         assert!(b2.is_none());
+    }
+
+    #[test]
+    fn freed_slot_is_reclaimed_zeroed() {
+        let pool: StaticPacketPool<4, 1> = StaticPacketPool::new();
+        let a = pool.alloc().unwrap();
+        // SAFETY: `a` owns the slot.
+        unsafe { a.buf.write(0xAA) };
+        assert!(pool.alloc().is_none());
+        pool.free(&a);
+        let b = pool.alloc().unwrap();
+        assert_eq!(b.idx, a.idx);
+        // SAFETY: `b` owns the slot.
+        assert_eq!(unsafe { b.buf.read() }, 0);
     }
 }
